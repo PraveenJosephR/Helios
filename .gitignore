@@ -1,0 +1,7 @@
+# Build folders
+build/
+dist/
+
+# Python cache
+__pycache__/
+*.py[cod]
