@@ -2,7 +2,13 @@
 import keyboard
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject, QSettings
-from PySide6.QtGui import QFont, QKeySequence
+from PySide6.QtGui import (
+    QFont,
+    QKeySequence,
+    QPainter,
+    QColor,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -117,7 +123,9 @@ class DriveRow(QFrame):
         )
 
 
+
 class GamingOverlay(QWidget):
+
     def __init__(self):
         super().__init__()
 
@@ -137,63 +145,106 @@ class GamingOverlay(QWidget):
             Qt.WidgetAttribute.WA_ShowWithoutActivating
         )
 
-        self.setFixedWidth(245)
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+
+        self.setFixedWidth(270)
 
         self.setStyleSheet("""
             QWidget {
-                background-color: rgba(18, 20, 27, 225);
-                color: white;
-                border-radius: 12px;
-            }
-
-            QLabel {
                 background: transparent;
+                color: #e8edf5;
+                font-family: "Segoe UI";
                 border: none;
             }
 
             QLabel#overlayTitle {
-                color: #aeb8c8;
-                font-size: 11px;
+                color: #929eb2;
+                font-size: 10px;
                 font-weight: bold;
+                letter-spacing: 1.5px;
+            }
+
+            QLabel#overlayName {
+                color: #d1d8e4;
+                font-size: 12px;
+                font-weight: 600;
             }
 
             QLabel#overlayValue {
                 color: #55d6a0;
-                font-size: 19px;
+                font-size: 17px;
                 font-weight: bold;
-            }
-
-            QLabel#overlayDrive {
-                color: #e0e5ee;
-                font-size: 12px;
             }
         """)
 
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(15, 13, 15, 13)
-        self.layout.setSpacing(8)
+        self.layout.setContentsMargins(17, 14, 17, 14)
+        self.layout.setSpacing(11)
 
-        heading = QLabel("HELIOS  •  LIVE")
+        # Header
+        heading = QLabel("HELIOS  •  HARDWARE MONITOR")
         heading.setObjectName("overlayTitle")
+
         self.layout.addWidget(heading)
 
+        # CPU and GPU
         self.cpu_label = self.add_temperature("CPU")
         self.gpu_label = self.add_temperature("GPU")
 
-        self.drive_labels = []
+        # Separator
+        separator = QFrame()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(
+            "background-color: rgba(150, 165, 185, 65);"
+        )
 
-        self.layout.addSpacing(3)
+        self.layout.addWidget(separator)
+
+        # Drive readings
+        self.drive_rows = []
+
+    def paintEvent(self, event):
+        """Draw the translucent rounded background."""
+
+        painter = QPainter(self)
+
+        painter.setRenderHint(
+            QPainter.RenderHint.Antialiasing
+        )
+
+        painter.setPen(
+            QPen(QColor(100, 115, 140, 100), 1)
+        )
+
+        painter.setBrush(
+            QColor(17, 21, 30, 220)
+        )
+
+        painter.drawRoundedRect(
+            self.rect().adjusted(1, 1, -1, -1),
+            13,
+            13
+        )
+
+        painter.end()
 
     def add_temperature(self, name):
+
         row = QHBoxLayout()
+        row.setSpacing(10)
 
         name_label = QLabel(name)
-        name_label.setStyleSheet(
-            "color: #c4cad5; font-size: 12px;"
-        )
+        name_label.setObjectName("overlayName")
 
         value_label = QLabel("-- °C")
         value_label.setObjectName("overlayValue")
+
+        value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignVCenter
+        )
 
         row.addWidget(name_label)
         row.addStretch()
@@ -204,37 +255,66 @@ class GamingOverlay(QWidget):
         return value_label
 
     def update_readings(self, readings):
+
         cpu = readings.get("cpu_temperature")
         gpu = readings.get("gpu_temperature")
 
         self.cpu_label.setText(
-            f"{cpu:.1f} °C" if cpu is not None else "-- °C"
+            f"{cpu:.1f} °C"
+            if cpu is not None else "-- °C"
         )
 
         self.gpu_label.setText(
-            f"{gpu:.1f} °C" if gpu is not None else "-- °C"
+            f"{gpu:.1f} °C"
+            if gpu is not None else "-- °C"
         )
 
-        for label in self.drive_labels:
-            self.layout.removeWidget(label)
-            label.deleteLater()
+        # Remove previous drive rows.
+        for row in self.drive_rows:
+            self.layout.removeWidget(row)
+            row.deleteLater()
 
-        self.drive_labels.clear()
+        self.drive_rows.clear()
 
+        # Add updated drive rows.
         for drive in readings.get("drives", []):
-            label = QLabel(
-                f"{drive['name']}: "
-                f"{drive['temperature']:.1f} °C"
+
+            row_widget = QWidget()
+            row_widget.setStyleSheet(
+                "background: transparent; border: none;"
             )
 
-            label.setObjectName("overlayDrive")
-            self.layout.addWidget(label)
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(10)
 
-            self.drive_labels.append(label)
+            name_label = QLabel(drive["name"])
+            name_label.setObjectName("overlayName")
+
+            temperature_label = QLabel(
+                f'{drive["temperature"]:.1f} °C'
+            )
+
+            temperature_label.setObjectName(
+                "overlayValue"
+            )
+
+            temperature_label.setAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter
+            )
+
+            row.addWidget(name_label, 1)
+            row.addWidget(temperature_label, 0)
+
+            self.layout.addWidget(row_widget)
+
+            self.drive_rows.append(row_widget)
 
         self.adjustSize()
 
     def move_to_top_right(self):
+
         screen = QApplication.primaryScreen()
 
         if screen is None:
@@ -246,6 +326,7 @@ class GamingOverlay(QWidget):
             geometry.right() - self.width() - 18,
             geometry.top() + 55
         )
+
 
 
 class HeliosWindow(QMainWindow):
