@@ -9,6 +9,9 @@ def get_stylesheet(theme="dark"):
             font-family: "Segoe UI";
             font-size: 13px;
         }
+        QLabel {
+            background-color: transparent;
+        }
 
         QLabel#mainTitle {
             color: #202735;
@@ -175,6 +178,9 @@ def get_stylesheet(theme="dark"):
         color: #e7eaf0;
         font-family: "Segoe UI";
         font-size: 13px;
+    }
+    QLabel {
+        background-color: transparent;
     }
 
     QLabel#mainTitle {
