@@ -465,7 +465,12 @@ class HeliosWindow(QMainWindow):
         usage_grid.addWidget(self.ram_usage_card, 0, 2)
 
         main_layout.addLayout(usage_grid)
+        self.drive_usage_cards = {}
 
+        self.drive_usage_grid = QGridLayout()
+        self.drive_usage_grid.setSpacing(12)
+
+        main_layout.addLayout(self.drive_usage_grid)
         # Overlay settings
         overlay_heading = QLabel("GAMING OVERLAY")
         overlay_heading.setObjectName("sectionTitle")
@@ -593,11 +598,13 @@ class HeliosWindow(QMainWindow):
         else:
             self.connection_label.setText(
                 "● LibreHardwareMonitor disconnected "
-                f"• {readings.get('error', 'Unknown error')}"
             )
 
         self.update_drive_list(
             readings.get("drives", [])
+        )
+        self.update_drive_usage(
+            readings.get("drive_usage", [])
         )
 
         self.overlay.update_readings(readings)
@@ -630,15 +637,40 @@ class HeliosWindow(QMainWindow):
 
             self.drive_layout.addWidget(row)
 
+
+    def update_drive_usage(self, drives):
+
+        for index, drive in enumerate(drives):
+
+            drive_id = drive["id"]
+
+            if drive_id not in self.drive_usage_cards:
+
+                card = UsageCard(
+                    f'{drive["name"]} USAGE'
+                )
+
+                self.drive_usage_cards[drive_id] = card
+
+                self.drive_usage_grid.addWidget(
+                    card,
+                    index // 3,
+                    index % 3
+                )
+
+            self.drive_usage_cards[drive_id].set_value(
+                drive["usage"]
+            )
+
     def apply_theme(self):
         self.setStyleSheet(
             get_stylesheet(self.theme)
         )
 
         self.theme_button.setText(
-            "Switch to Light Mode"
+            "Dark Knight"
             if self.theme == "dark"
-            else "Switch to Dark Mode"
+            else "Moon Knight"
         )
 
     def toggle_theme(self):

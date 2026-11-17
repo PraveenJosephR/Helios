@@ -5,3 +5,9 @@ dist/
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Ignore Python cache folders anywhere
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo

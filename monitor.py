@@ -311,6 +311,49 @@ class LibreHardwareMonitor:
 
         return list(drives.values())
 
+
+    # --------------------------------------------------
+    # DRIVE ACTIVITY / USAGE
+    # --------------------------------------------------
+
+    def get_drive_usage(self, sensors):
+
+        drives = {}
+
+        for sensor in sensors:
+
+            if sensor["sensor_type"].lower() != "load":
+                continue
+
+            if sensor["value"] is None:
+                continue
+
+            hardware = self.hardware_text(sensor)
+            hardware_id = sensor["hardware_id"]
+
+            if not hardware_id:
+                continue
+
+            if not any(marker in hardware for marker in (
+                "/nvme/",
+                "/hdd/",
+                "/ata/",
+                "/storage/",
+            )):
+                continue
+
+            # Only use actual disk activity, not used space.
+            if self.sensor_text(sensor) != "total activity":
+                continue
+
+            drives[hardware_id] = {
+                "id": hardware_id,
+                "name": sensor["hardware_name"] or "Drive",
+                "usage": max(0.0, min(100.0, sensor["value"]))
+            }
+
+        return list(drives.values())
+
     # --------------------------------------------------
     # COMPLETE HARDWARE READINGS
     # --------------------------------------------------
@@ -344,6 +387,9 @@ class LibreHardwareMonitor:
 
                 "drives":
                     self.get_drive_temperatures(sensors),
+                
+                "drive_usage": 
+                    self.get_drive_usage(sensors),
 
                 "sensor_count":
                     len(sensors),
@@ -366,7 +412,7 @@ class LibreHardwareMonitor:
                     psutil.cpu_percent(interval=None),
 
                 "gpu_usage": None,
-
+                "drive_usage": [],
                 "ram_usage":
                     psutil.virtual_memory().percent,
 

@@ -36,3 +36,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# python -m PyInstaller --noconfirm --clean --onefile --windowed --uac-admin --name Helios --icon=app.ico --add-data "app.ico;." main.py
