@@ -5,7 +5,7 @@ import urllib.request
 
 import psutil
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Signal
 
 
 LHM_URL = "http://127.0.0.1:8085/data.json"
@@ -13,7 +13,7 @@ REQUEST_TIMEOUT = 3
 
 
 def to_number(value):
-    """Convert LibreHardwareMonitor sensor values to floats."""
+    """Convert a LibreHardwareMonitor value into a float."""
     if value is None:
         return None
 
@@ -23,38 +23,20 @@ def to_number(value):
     match = re.search(r"-?\d+(?:\.\d+)?", str(value))
 
     if match:
-        try:
-            return float(match.group())
-        except ValueError:
-            return None
+        return float(match.group())
 
     return None
 
 
-def get_sensor_value(sensor):
-    """Prefer RawValue, falling back to the displayed Value."""
-    raw = to_number(sensor.get("RawValue"))
+def flatten_hardware(node, hardware_name="", hardware_id=""):
+    """Extract all sensors while preserving their hardware identity."""
 
-    if raw is not None:
-        return raw
-
-    return to_number(sensor.get("Value"))
-
-
-def flatten_hardware(node, inherited_name="", inherited_id=""):
-    """
-    Recursively extract sensors while preserving their parent
-    hardware identity.
-    """
     if not isinstance(node, dict):
         return []
 
-    hardware_name = inherited_name
-    hardware_id = inherited_id
-
     if "HardwareId" in node:
         hardware_id = str(node.get("HardwareId") or "")
-        hardware_name = str(node.get("Text") or inherited_name)
+        hardware_name = str(node.get("Text") or hardware_name)
 
     results = []
 
@@ -65,38 +47,49 @@ def flatten_hardware(node, inherited_name="", inherited_id=""):
             "sensor_id": str(node.get("SensorId") or ""),
             "hardware_name": hardware_name,
             "hardware_id": hardware_id,
-            "value": get_sensor_value(node),
+            "value": to_number(node.get("RawValue")),
         })
 
     for child in node.get("Children", []):
         results.extend(
-            flatten_hardware(child, hardware_name, hardware_id)
+            flatten_hardware(
+                child,
+                hardware_name,
+                hardware_id
+            )
         )
 
     return results
 
 
 class LibreHardwareMonitor:
+
     def __init__(self):
         self.last_error = None
 
     def read_sensors(self):
-        """Fetch and flatten the complete LHM sensor tree."""
+        """Read the LHM v0.9.6 Remote Web Server."""
+
         request = urllib.request.Request(
             LHM_URL,
-            headers={"User-Agent": "Helios-Monitor"}
+            headers={
+                "User-Agent": "Helios-System-Monitor"
+            }
         )
 
         with urllib.request.urlopen(
             request,
             timeout=REQUEST_TIMEOUT
         ) as response:
-            data = json.loads(response.read().decode("utf-8"))
+
+            data = json.loads(
+                response.read().decode("utf-8")
+            )
 
         sensors = []
 
-        for root in data.get("Children", []):
-            sensors.extend(flatten_hardware(root))
+        for hardware in data.get("Children", []):
+            sensors.extend(flatten_hardware(hardware))
 
         return sensors
 
@@ -117,9 +110,14 @@ class LibreHardwareMonitor:
 
     @staticmethod
     def sensor_text(sensor):
-        return sensor["sensor_name"].lower()
+        return sensor["sensor_name"].strip().lower()
 
-    def find_temperature(self, sensors, hardware_filter, preferred_names):
+    # --------------------------------------------------
+    # CPU TEMPERATURE
+    # --------------------------------------------------
+
+    def get_cpu_temperature(self, sensors):
+
         candidates = []
 
         for sensor in sensors:
@@ -131,23 +129,81 @@ class LibreHardwareMonitor:
 
             hardware = self.hardware_text(sensor)
 
-            if not hardware_filter(hardware):
-                continue
+            if (
+                "/amdcpu/" in hardware
+                or "ryzen" in hardware
+            ):
+                candidates.append(sensor)
 
-            candidates.append(sensor)
+        preferred_names = [
+            "cpu package",
+            "tctl/tdie",
+            "tdie",
+            "cpu die",
+            "core average",
+        ]
 
-        if not candidates:
-            return None
-
-        # Prefer meaningful CPU/GPU temperature labels.
         for preferred in preferred_names:
             for sensor in candidates:
                 if preferred in self.sensor_text(sensor):
                     return sensor["value"]
 
-        return candidates[0]["value"]
+        if candidates:
+            return candidates[0]["value"]
 
-    def find_load(self, sensors, hardware_filter):
+        return None
+
+    # --------------------------------------------------
+    # GPU TEMPERATURE
+    # --------------------------------------------------
+
+    def get_gpu_temperature(self, sensors):
+
+        candidates = []
+
+        for sensor in sensors:
+            if not self.is_temperature(sensor):
+                continue
+
+            if sensor["value"] is None:
+                continue
+
+            hardware = self.hardware_text(sensor)
+
+            if (
+                "/nvidiagpu/" in hardware
+                or "geforce" in hardware
+                or "rtx" in hardware
+            ):
+                candidates.append(sensor)
+
+        preferred_names = [
+            "gpu core",
+            "gpu temperature",
+            "core",
+        ]
+
+        for preferred in preferred_names:
+            for sensor in candidates:
+                if self.sensor_text(sensor) == preferred:
+                    return sensor["value"]
+
+        if candidates:
+            return candidates[0]["value"]
+
+        return None
+
+    # --------------------------------------------------
+    # CPU / GPU USAGE
+    # --------------------------------------------------
+
+    def get_cpu_usage(self, sensors):
+
+        # Windows CPU usage is obtained through psutil.
+        return psutil.cpu_percent(interval=None)
+
+    def get_gpu_usage(self, sensors):
+
         candidates = []
 
         for sensor in sensors:
@@ -157,75 +213,41 @@ class LibreHardwareMonitor:
             if sensor["value"] is None:
                 continue
 
-            if hardware_filter(self.hardware_text(sensor)):
+            hardware = self.hardware_text(sensor)
+
+            if (
+                "/nvidiagpu/" in hardware
+                or "geforce" in hardware
+                or "rtx" in hardware
+            ):
                 candidates.append(sensor)
 
-        if not candidates:
-            return None
-
-        # Prefer total or overall load sensors.
+        # Prefer GPU Core load when available.
         for sensor in candidates:
             name = self.sensor_text(sensor)
 
-            if "total" in name or "overall" in name:
+            if name in ("gpu core", "gpu core load"):
                 return sensor["value"]
 
-        return candidates[0]["value"]
+        # Otherwise use the first available GPU load.
+        if candidates:
+            return candidates[0]["value"]
 
-    def get_cpu_temperature(self, sensors):
-        return self.find_temperature(
-            sensors,
-            lambda h: (
-                "/amdcpu/" in h
-                or "/intelcpu/" in h
-                or "ryzen" in h
-            ),
-            [
-                "cpu package",
-                "tctl/tdie",
-                "tdie",
-                "cpu die",
-                "ccd1",
-                "core average",
-            ]
-        )
+        return None
 
-    def get_gpu_temperature(self, sensors):
-        return self.find_temperature(
-            sensors,
-            lambda h: (
-                "/nvidiagpu/" in h
-                or "/atigpu/" in h
-                or "geforce" in h
-                or "rtx" in h
-            ),
-            [
-                "gpu core",
-                "gpu temperature",
-                "hot spot",
-                "core",
-            ]
-        )
-
-    def get_gpu_usage(self, sensors):
-        return self.find_load(
-            sensors,
-            lambda h: (
-                "/nvidiagpu/" in h
-                or "/atigpu/" in h
-                or "geforce" in h
-                or "rtx" in h
-            )
-        )
+    # --------------------------------------------------
+    # DRIVE TEMPERATURES
+    # --------------------------------------------------
 
     def get_drive_temperatures(self, sensors):
+
         drives = {}
 
         drive_markers = (
             "/nvme/",
+            "/hdd/",
             "/ata/",
             "/storage/",
-            "/hdd/",
             "nvme",
             "samsung",
             "western digital",
@@ -238,6 +260,7 @@ class LibreHardwareMonitor:
         )
 
         for sensor in sensors:
+
             if not self.is_temperature(sensor):
                 continue
 
@@ -246,94 +269,134 @@ class LibreHardwareMonitor:
 
             hardware = self.hardware_text(sensor)
 
-            if not any(marker in hardware for marker in drive_markers):
+            if not any(
+                marker in hardware
+                for marker in drive_markers
+            ):
                 continue
 
             hardware_id = sensor["hardware_id"]
 
             if not hardware_id:
-                hardware_id = sensor["hardware_name"]
-
-            if not hardware_id:
                 continue
 
-            # Avoid duplicate readings for the same physical drive.
-            if hardware_id not in drives:
-                drives[hardware_id] = {
-                    "name": sensor["hardware_name"] or "Drive",
-                    "temperature": sensor["value"],
-                }
+            sensor_name = self.sensor_text(sensor)
 
-            elif (
-                "composite" in self.sensor_text(sensor)
-                or "temperature" in self.sensor_text(sensor)
+            # Never display warning or critical thresholds.
+            if sensor_name in (
+                "warning temperature",
+                "critical temperature",
             ):
-                drives[hardware_id]["temperature"] = sensor["value"]
+                continue
+
+            # NVMe SSDs: ONLY Composite Temperature.
+            if "/nvme/" in hardware_id.lower():
+
+                if sensor_name != "composite temperature":
+                    continue
+
+            # HDD / SATA: ordinary Temperature.
+            else:
+
+                if sensor_name not in (
+                    "temperature",
+                    "composite temperature",
+                ):
+                    continue
+
+            drives[hardware_id] = {
+                "name": sensor["hardware_name"] or "Drive",
+                "temperature": sensor["value"],
+            }
 
         return list(drives.values())
 
+    # --------------------------------------------------
+    # COMPLETE HARDWARE READINGS
+    # --------------------------------------------------
+
     def get_all_readings(self):
-        """Collect all hardware readings into one dictionary."""
+
         self.last_error = None
 
         try:
+
             sensors = self.read_sensors()
 
-            cpu_temperature = self.get_cpu_temperature(sensors)
-            gpu_temperature = self.get_gpu_temperature(sensors)
-
-            gpu_usage = self.get_gpu_usage(sensors)
-
-            cpu_usage = psutil.cpu_percent(interval=None)
-            ram_usage = psutil.virtual_memory().percent
-
-            drive_temperatures = self.get_drive_temperatures(sensors)
-
-            return {
+            readings = {
                 "connected": True,
                 "error": None,
-                "cpu_temperature": cpu_temperature,
-                "gpu_temperature": gpu_temperature,
-                "cpu_usage": cpu_usage,
-                "gpu_usage": gpu_usage,
-                "ram_usage": ram_usage,
-                "drives": drive_temperatures,
-                "sensor_count": len(sensors),
+
+                "cpu_temperature":
+                    self.get_cpu_temperature(sensors),
+
+                "gpu_temperature":
+                    self.get_gpu_temperature(sensors),
+
+                "cpu_usage":
+                    self.get_cpu_usage(sensors),
+
+                "gpu_usage":
+                    self.get_gpu_usage(sensors),
+
+                "ram_usage":
+                    psutil.virtual_memory().percent,
+
+                "drives":
+                    self.get_drive_temperatures(sensors),
+
+                "sensor_count":
+                    len(sensors),
             }
 
+            return readings
+
         except Exception as error:
+
             self.last_error = str(error)
 
             return {
                 "connected": False,
                 "error": self.last_error,
+
                 "cpu_temperature": None,
                 "gpu_temperature": None,
-                "cpu_usage": psutil.cpu_percent(interval=None),
+
+                "cpu_usage":
+                    psutil.cpu_percent(interval=None),
+
                 "gpu_usage": None,
-                "ram_usage": psutil.virtual_memory().percent,
+
+                "ram_usage":
+                    psutil.virtual_memory().percent,
+
                 "drives": [],
                 "sensor_count": 0,
             }
 
 
+# ======================================================
+# BACKGROUND MONITORING WORKER
+# ======================================================
+
 class MonitorWorker(QObject):
-    """Background worker that reads hardware without freezing the UI."""
 
     readings_ready = Signal(dict)
     finished = Signal()
 
     def __init__(self):
         super().__init__()
+
         self.monitor = LibreHardwareMonitor()
         self.running = True
 
     def update_readings(self):
+
         if not self.running:
-            self.finished.emit()
             return
 
         readings = self.monitor.get_all_readings()
+
         self.readings_ready.emit(readings)
 
     def stop(self):
